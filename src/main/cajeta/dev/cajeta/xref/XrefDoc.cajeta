@@ -1,0 +1,334 @@
+package dev.cajeta.xref;
+
+import cajeta.codec.json.JsonReader;
+import cajeta.collection.ArrayList;
+import cajeta.io.file.File;
+import cajeta.lang.String;
+import cajeta.lang.StringBuilder;
+
+/**
+ * A parsed `--emit-xref` document: the compiler's cross-reference index as a
+ * typed model — call edges, override relations, and method declarations, all
+ * keyed with [[Keys]]' normalized `owner::name/argc` form.
+ *
+ * ## Who this is for
+ *
+ * Every tool that consumes the xref wants the same three things: the call
+ * graph's edges, the override (virtual-dispatch) relation, and a way to map a
+ * key back to a human signature and declaration site. IDE symbol services,
+ * documentation generators, dead-code analyzers (cajeta-coco) and lint rules
+ * should all read the document through this one parser, so the format and its
+ * reader evolve together instead of each tool drifting on its own.
+ *
+ * ## How it reads
+ *
+ * Streaming (`JsonReader`, the pull tokenizer) in two passes: pass A counts
+ * records per section so storage is sized exactly; pass B fills. The DOM tier
+ * is deliberately avoided. Only `calls`, `overrides` and method-grain
+ * `declarations` are materialized — other sections flow through the depth
+ * accounting untouched. Malformed or incomplete records are skipped, not
+ * fatal: a partial graph should degrade a consumer's analysis, never abort it.
+ */
+public class XrefDoc {
+    /** Call edges, parallel: normalized caller / callee, call-site file+line. */
+    ArrayList<String> edgeFrom;
+    ArrayList<String> edgeTo;
+    ArrayList<String> edgeFile;
+    int64[] edgeLine;
+    int32 edgeN;
+
+    /** Override edges: base-method key -> overriding-method key. */
+    ArrayList<String> ovrBase;
+    ArrayList<String> ovrImpl;
+
+    /** Method declarations: key -> human signature + declaration site. */
+    ArrayList<String> declKey;
+    ArrayList<String> declSig;
+    ArrayList<String> declFile;
+    int64[] declLine;
+    int32 declN;
+
+    XrefDoc(int32 edges, int32 ovrs, int32 decls) {
+        this.edgeFrom #= heap ArrayList<String>();
+        this.edgeTo #= heap ArrayList<String>();
+        this.edgeFile #= heap ArrayList<String>();
+        int32 ec = edges;
+        if (ec < 1) { ec = 1; }
+        this.edgeLine #= heap int64[ec];
+        this.edgeN = 0;
+        this.ovrBase #= heap ArrayList<String>();
+        this.ovrImpl #= heap ArrayList<String>();
+        this.declKey #= heap ArrayList<String>();
+        this.declSig #= heap ArrayList<String>();
+        this.declFile #= heap ArrayList<String>();
+        int32 dc = decls;
+        if (dc < 1) { dc = 1; }
+        this.declLine #= heap int64[dc];
+        this.declN = 0;
+    }
+
+    // ── the read surface ───────────────────────────────────────
+
+    public int32 callCount() { return this.edgeFrom.count(); }
+    public String callerAt(int32 i) { return this.edgeFrom.get(i); }
+    public String calleeAt(int32 i) { return this.edgeTo.get(i); }
+    public String callFileAt(int32 i) { return this.edgeFile.get(i); }
+    public int64 callLineAt(int32 i) {
+        if (i < 0 || i >= this.edgeN) { return 0; }
+        return this.edgeLine[i];
+    }
+
+    public int32 overrideCount() { return this.ovrBase.count(); }
+    public String overrideBaseAt(int32 i) { return this.ovrBase.get(i); }
+    public String overrideImplAt(int32 i) { return this.ovrImpl.get(i); }
+
+    public int32 declCount() { return this.declKey.count(); }
+    public String declKeyAt(int32 i) { return this.declKey.get(i); }
+
+    /** Human signature for `key` (parameter names included), or empty. */
+    public #String signatureOf(String key) {
+        int32 i = 0;
+        while (i < this.declKey.count()) {
+            if (this.declKey.get(i).equals(key)) {
+                String s = this.declSig.get(i);
+                return s.substring(0, s.byteLength());
+            }
+            i = i + 1;
+        }
+        return "";
+    }
+
+    /** `file:line` of `key`'s declaration, or empty. */
+    public #String declSiteOf(String key) {
+        int32 i = 0;
+        while (i < this.declKey.count()) {
+            if (this.declKey.get(i).equals(key)) {
+                StringBuilder sb = stack StringBuilder();
+                sb.append(this.declFile.get(i));
+                sb.append(":");
+                sb.append(Keys.decimal(this.declLine[i]));
+                return sb.toString();
+            }
+            i = i + 1;
+        }
+        return "";
+    }
+
+    /** Number of call edges naming `key` as callee. */
+    public int32 callerCount(String key) {
+        int32 found = 0;
+        int32 i = 0;
+        while (i < this.edgeTo.count()) {
+            if (this.edgeTo.get(i).equals(key)) { found = found + 1; }
+            i = i + 1;
+        }
+        return found;
+    }
+
+    /**
+     * Render `key`'s call sites as `caller at file:line`, comma separated,
+     * capped at three — enough to imitate, without flooding a report.
+     */
+    public #String callersOf(String key) {
+        StringBuilder sb = stack StringBuilder();
+        int32 found = 0;
+        int32 i = 0;
+        while (i < this.edgeTo.count()) {
+            if (this.edgeTo.get(i).equals(key)) {
+                if (found < 3) {
+                    if (found > 0) { sb.append(", "); }
+                    sb.append(this.edgeFrom.get(i));
+                    sb.append(" at ");
+                    sb.append(this.edgeFile.get(i));
+                    sb.append(":");
+                    sb.append(Keys.decimal(this.edgeLine[i]));
+                }
+                found = found + 1;
+            }
+            i = i + 1;
+        }
+        if (found > 3) {
+            sb.append(" (+");
+            sb.append(Keys.decimal((int64) (found - 3)));
+            sb.append(" more)");
+        }
+        return sb.toString();
+    }
+
+    // ── parsing ────────────────────────────────────────────────
+
+    // JsonToken ordinals consumed as int32 tags (0 START_OBJECT, 1 END_OBJECT,
+    // 2 START_ARRAY, 3 END_ARRAY, 4 KEY, 5 STRING, 6 NUMBER, 9 END).
+    static int32 tok(JsonReader r) {
+        return (int32) r.next();
+    }
+
+    /** Parse `path`. A missing or empty file yields an empty document. */
+    public static #XrefDoc parseFile(String path) {
+        // NUL-terminate the path copy: the file-open intrinsic reads a
+        // String's bytes as a C string.
+        int32 pn = path.byteLength();
+        int8[] pbuf #= heap int8[pn + 1];
+        int32 pi = 0;
+        while (pi < pn) {
+            pbuf[pi] = path.byteAt(pi);
+            pi = pi + 1;
+        }
+        pbuf[pn] = 0;
+        String cpath #= heap String(#pbuf, pn);
+
+        int8[] buf #= File.readAllBytes(cpath);
+        int64 n = buf.count();
+
+        // Pass A: counts.
+        int64 nCalls = 0;
+        int64 nOvrs = 0;
+        int64 nDecls = 0;
+        if (n > 0) {
+            JsonReader r = stack JsonReader(buf, n);
+            int32 depth = 0;
+            int32 section = 0;
+            int32 t = XrefDoc.tok(r);
+            while (t != 9) {
+                if (t == 0) {
+                    if (depth == 2 && section == 1) { nCalls = nCalls + 1; }
+                    if (depth == 2 && section == 2) { nOvrs = nOvrs + 1; }
+                    if (depth == 2 && section == 3) { nDecls = nDecls + 1; }
+                    depth = depth + 1;
+                } else if (t == 1) {
+                    depth = depth - 1;
+                } else if (t == 2) {
+                    depth = depth + 1;
+                } else if (t == 3) {
+                    depth = depth - 1;
+                    if (depth == 1) { section = 0; }
+                } else if (t == 4) {
+                    if (depth == 1) {
+                        String name #= r.currentString();
+                        section = XrefDoc.sectionOf(name);
+                    }
+                }
+                t = XrefDoc.tok(r);
+            }
+        }
+
+        XrefDoc d #= heap XrefDoc((int32) nCalls, (int32) nOvrs, (int32) nDecls);
+        if (n == 0) { return #d; }
+
+        // Pass B: fill. Record fields sit at depth 3; nested arrays inside a
+        // record (modifiers, params) push depth past 3 and fall out of the
+        // capture gate on their own.
+        JsonReader r2 = stack JsonReader(buf, n);
+        int32 depth = 0;
+        int32 section = 0;
+        int32 field = 0;
+        String f1 #= "";
+        String f2 #= "";
+        String f3 #= "";
+        int64 fLine = 0;
+        int32 t = XrefDoc.tok(r2);
+        while (t != 9) {
+            if (t == 0) {
+                if (depth == 2 && section > 0) {
+                    f1 #= "";
+                    f2 #= "";
+                    f3 #= "";
+                    fLine = 0;
+                }
+                depth = depth + 1;
+            } else if (t == 1) {
+                depth = depth - 1;
+                if (depth == 2 && section > 0) {
+                    XrefDoc.flush(d, section, f1, f2, f3, fLine);
+                }
+            } else if (t == 2) {
+                depth = depth + 1;
+            } else if (t == 3) {
+                depth = depth - 1;
+                if (depth == 1) { section = 0; }
+            } else if (t == 4) {
+                if (depth == 1) {
+                    String name #= r2.currentString();
+                    section = XrefDoc.sectionOf(name);
+                    field = 0;
+                } else if (depth == 3 && section > 0) {
+                    String name #= r2.currentString();
+                    field = XrefDoc.fieldOf(section, name);
+                } else {
+                    field = 0;
+                }
+            } else if (t == 5) {
+                if (depth == 3 && section > 0) {
+                    if (field == 1) { f1 #= r2.currentString(); }
+                    else if (field == 2) { f2 #= r2.currentString(); }
+                    else if (field == 3) { f3 #= r2.currentString(); }
+                }
+                field = 0;
+            } else if (t == 6) {
+                if (depth == 3 && section > 0 && field == 4) {
+                    fLine = r2.currentNumberAsInt64();
+                }
+                field = 0;
+            } else {
+                field = 0;
+            }
+            t = XrefDoc.tok(r2);
+        }
+        return #d;
+    }
+
+    static int32 sectionOf(String name) {
+        if (name.equals("calls"))        { return 1; }
+        if (name.equals("overrides"))    { return 2; }
+        if (name.equals("declarations")) { return 3; }
+        return 0;
+    }
+
+    static int32 fieldOf(int32 section, String name) {
+        if (section == 1) {
+            if (name.equals("caller")) { return 1; }
+            if (name.equals("callee")) { return 2; }
+            if (name.equals("file"))   { return 3; }
+            if (name.equals("line"))   { return 4; }
+        } else if (section == 2) {
+            if (name.equals("method"))    { return 1; }
+            if (name.equals("overrides")) { return 2; }
+        } else if (section == 3) {
+            if (name.equals("overloadKey")) { return 1; }
+            if (name.equals("signature"))   { return 2; }
+            if (name.equals("file"))        { return 3; }
+            if (name.equals("line"))        { return 4; }
+        }
+        return 0;
+    }
+
+    static void flush(XrefDoc d, int32 section, String f1, String f2,
+                      String f3, int64 fLine) {
+        if (section == 1) {
+            if (f1.byteLength() > 0 && f2.byteLength() > 0) {
+                d.edgeFrom.add(Keys.normalize(f1));
+                d.edgeTo.add(Keys.normalize(f2));
+                d.edgeFile.add(f3.substring(0, f3.byteLength()));
+                if (d.edgeN < (int32) d.edgeLine.count()) {
+                    d.edgeLine[d.edgeN] = fLine;
+                    d.edgeN = d.edgeN + 1;
+                }
+            }
+        } else if (section == 2) {
+            if (f1.byteLength() > 0 && f2.byteLength() > 0) {
+                d.ovrBase.add(Keys.normalize(f2));
+                d.ovrImpl.add(Keys.normalize(f1));
+            }
+        } else {
+            if (f1.byteLength() > 0) {
+                d.declKey.add(Keys.normalize(f1));
+                d.declSig.add(f2.substring(0, f2.byteLength()));
+                d.declFile.add(f3.substring(0, f3.byteLength()));
+                if (d.declN < (int32) d.declLine.count()) {
+                    d.declLine[d.declN] = fLine;
+                    d.declN = d.declN + 1;
+                }
+            }
+        }
+    }
+}
