@@ -177,8 +177,11 @@ public class XrefDoc {
         pbuf[pn] = 0;
         String cpath #= heap String(#pbuf, pn);
 
+        // readAllBytes answers NULL for a path that is not there, so the
+        // missing-file case has to be read off the handle, not off a length.
         int8[] buf #= File.readAllBytes(cpath);
-        int64 n = buf.count();
+        int64 n = 0;
+        if (buf != null) { n = buf.count(); }
 
         // Pass A: counts.
         int64 nCalls = 0;
