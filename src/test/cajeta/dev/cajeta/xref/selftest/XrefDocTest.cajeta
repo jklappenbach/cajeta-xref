@@ -1,0 +1,234 @@
+package dev.cajeta.xref.selftest;
+
+import dev.cajeta.unit.Assert;
+import dev.cajeta.xref.XrefDoc;
+import cajeta.io.file.File;
+import cajeta.io.file.Path;
+import cajeta.lang.String;
+
+/**
+ * [[XrefDoc]] over documents shaped exactly like the compiler's
+ * `--emit-xref` output: the three materialized sections, the sections that
+ * must stay invisible, and the degrade-don't-abort paths.
+ *
+ * Fixtures are written under `tmp/` relative to the process working
+ * directory, which `run-tests.sh` sets to the repository root.
+ */
+public class XrefDocTest {
+
+    public XrefDocTest() { return; }
+
+    /** Write `body` to `path`, creating `tmp/` first. Returns `path`. */
+    static #String fixture(String path, String body) {
+        Path dir #= Path.of("tmp");
+        dir.mkdirs();
+        int8[] bytes #= body.toBytes();
+        File.writeAllBytes(path, bytes, (int64) body.byteLength());
+        return path.substring(0, path.byteLength());
+    }
+
+    /** A document carrying every section the compiler emits. */
+    static #String fullDoc() {
+        return "{\n"
+             + "  \"version\": {\"major\": 1, \"minor\": 0},\n"
+             + "  \"sourceRoot\": \"src/main/cajeta/\",\n"
+             + "  \"declarations\": [\n"
+             + "    {\"fqn\": \"p.C\", \"kind\": \"class\", \"file\": \"p/C.cajeta\", \"line\": 3, \"col\": 11},\n"
+             + "    {\"fqn\": \"p.C.both\", \"kind\": \"method\", \"file\": \"p/C.cajeta\", \"line\": 9, \"col\": 4, \"owner\": \"p.C\", \"signature\": \"int32 both(int32 a, int32 b)\", \"overloadKey\": \"p.C::both(int32,int32)\"},\n"
+             + "    {\"fqn\": \"p.C.one\", \"kind\": \"method\", \"file\": \"p/C.cajeta\", \"line\": 17, \"col\": 4, \"owner\": \"p.C\", \"signature\": \"void one(cajeta.lang.String s)\", \"overloadKey\": \"p.C::one(cajeta.lang.String)\"}\n"
+             + "  ],\n"
+             + "  \"inheritance\": [\n"
+             + "    {\"type\": \"p.D\", \"extends\": \"p.C\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
+             + "  ],\n"
+             + "  \"references\": [\n"
+             + "    {\"symbol\": \"p.C\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
+             + "  ],\n"
+             + "  \"overrides\": [\n"
+             + "    {\"method\": \"p.D::both(pointer,int32,int32)\", \"overrides\": \"p.C::both(pointer,int32,int32)\", \"file\": \"p/D.cajeta\", \"line\": 5, \"col\": 16}\n"
+             + "  ],\n"
+             + "  \"calls\": [\n"
+             + "    {\"callee\": \"p.C::both(int32,int32)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 4, \"col\": 9},\n"
+             + "    {\"callee\": \"p.C::both(b:int32,a:int32)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 5, \"col\": 9},\n"
+             + "    {\"callee\": \"p.C::one(cajeta.lang.String)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 6, \"col\": 9}\n"
+             + "  ]\n"
+             + "}\n";
+    }
+
+    @Test
+    public void callEdgesCarryNormalizedEndpointsAndSite() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 3, (int64) d.callCount());
+        Assert.equals("p.C::both/2", d.calleeAt(0));
+        Assert.equals("p.M::run/0", d.callerAt(0));
+        Assert.equals("p/M.cajeta", d.callFileAt(0));
+        Assert.equals((int64) 4, d.callLineAt(0));
+        Assert.equals("p.C::one/1", d.calleeAt(2));
+        Assert.equals((int64) 6, d.callLineAt(2));
+    }
+
+    /** The two compiler spellings of one callee land on one key. */
+    @Test
+    public void bothCalleeSpellingsAgree() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals(d.calleeAt(0), d.calleeAt(1));
+        Assert.equals((int64) 2, (int64) d.callerCount("p.C::both/2"));
+        Assert.equals((int64) 1, (int64) d.callerCount("p.C::one/1"));
+    }
+
+    @Test
+    public void overridesAreStoredBaseThenImpl() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 1, (int64) d.overrideCount());
+        Assert.equals("p.C::both/3", d.overrideBaseAt(0));
+        Assert.equals("p.D::both/3", d.overrideImplAt(0));
+    }
+
+    /** Only method-grain declarations materialize; the class row is dropped. */
+    @Test
+    public void onlyMethodDeclarationsAreMaterialized() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 2, (int64) d.declCount());
+        Assert.equals("p.C::both/2", d.declKeyAt(0));
+        Assert.equals("p.C::one/1", d.declKeyAt(1));
+    }
+
+    @Test
+    public void signatureAndSiteResolveByKey() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        String sig #= d.signatureOf("p.C::both/2");
+        Assert.equals("int32 both(int32 a, int32 b)", sig);
+        String site #= d.declSiteOf("p.C::both/2");
+        Assert.equals("p/C.cajeta:9", site);
+        String site2 #= d.declSiteOf("p.C::one/1");
+        Assert.equals("p/C.cajeta:17", site2);
+    }
+
+    /** The lookups do NOT fire for an unknown key: empty, not a stale hit. */
+    @Test
+    public void unknownKeyResolvesToEmpty() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        String sig #= d.signatureOf("p.Z::absent/0");
+        Assert.equals("", sig);
+        String site #= d.declSiteOf("p.Z::absent/0");
+        Assert.equals("", site);
+        Assert.equals((int64) 0, (int64) d.callerCount("p.Z::absent/0"));
+    }
+
+    /**
+     * `inheritance` and `references` are shaped like records and sit at the
+     * same depth; nothing from them may reach the three stores.
+     */
+    @Test
+    public void unmaterializedSectionsStayInvisible() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 3, (int64) d.callCount());
+        Assert.equals((int64) 1, (int64) d.overrideCount());
+        Assert.equals((int64) 2, (int64) d.declCount());
+    }
+
+    @Test
+    public void callersAreRenderedWithTheirSites() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        String s #= d.callersOf("p.C::one/1");
+        Assert.equals("p.M::run/0 at p/M.cajeta:6", s);
+    }
+
+    /** At or below the cap the "+N more" tail does NOT appear. */
+    @Test
+    public void threeCallersRenderWithoutATail() {
+        String body #= "{\"calls\": [\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::a()\", \"file\": \"f.cajeta\", \"line\": 1},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::b()\", \"file\": \"f.cajeta\", \"line\": 2},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::c()\", \"file\": \"f.cajeta\", \"line\": 3}\n"
+             + "]}\n";
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-cap3.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 3, (int64) d.callerCount("p.C::t/0"));
+        String s #= d.callersOf("p.C::t/0");
+        Assert.equals("p.M::a/0 at f.cajeta:1, p.M::b/0 at f.cajeta:2, p.M::c/0 at f.cajeta:3", s);
+    }
+
+    /** Past the cap it FIRES, and counts the ones it did not print. */
+    @Test
+    public void callersPastTheCapAreSummarized() {
+        String body #= "{\"calls\": [\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::a()\", \"file\": \"f.cajeta\", \"line\": 1},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::b()\", \"file\": \"f.cajeta\", \"line\": 2},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::c()\", \"file\": \"f.cajeta\", \"line\": 3},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::d()\", \"file\": \"f.cajeta\", \"line\": 4},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::e()\", \"file\": \"f.cajeta\", \"line\": 5}\n"
+             + "]}\n";
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-cap5.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 5, (int64) d.callerCount("p.C::t/0"));
+        String s #= d.callersOf("p.C::t/0");
+        Assert.equals("p.M::a/0 at f.cajeta:1, p.M::b/0 at f.cajeta:2, p.M::c/0 at f.cajeta:3 (+2 more)", s);
+    }
+
+    /** A record short of its required fields is skipped, not fatal. */
+    @Test
+    public void incompleteRecordIsSkippedAndParsingContinues() {
+        String body #= "{\"calls\": [\n"
+             + "  {\"caller\": \"p.M::a()\", \"file\": \"f.cajeta\", \"line\": 1},\n"
+             + "  {\"callee\": \"p.C::t()\", \"file\": \"f.cajeta\", \"line\": 2},\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::c()\", \"file\": \"f.cajeta\", \"line\": 3}\n"
+             + "]}\n";
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-partial.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 1, (int64) d.callCount());
+        Assert.equals("p.C::t/0", d.calleeAt(0));
+        Assert.equals("p.M::c/0", d.callerAt(0));
+        Assert.equals((int64) 3, d.callLineAt(0));
+    }
+
+    @Test
+    public void emptyFileYieldsAnEmptyDocument() {
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-empty.json", "");
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 0, (int64) d.callCount());
+        Assert.equals((int64) 0, (int64) d.overrideCount());
+        Assert.equals((int64) 0, (int64) d.declCount());
+        Assert.equals((int64) 0, d.callLineAt(0));
+    }
+
+    @Test
+    public void missingFileYieldsAnEmptyDocument() {
+        Path dir #= Path.of("tmp");
+        dir.mkdirs();
+        Path absent #= Path.of("tmp/xref-selftest-absent.json");
+        if (absent.exists()) { absent.delete(); }
+
+        XrefDoc d #= XrefDoc.parseFile("tmp/xref-selftest-absent.json");
+        Assert.equals((int64) 0, (int64) d.callCount());
+        Assert.equals((int64) 0, (int64) d.overrideCount());
+        Assert.equals((int64) 0, (int64) d.declCount());
+    }
+}

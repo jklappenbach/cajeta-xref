@@ -1,0 +1,91 @@
+package dev.cajeta.xref.selftest;
+
+import dev.cajeta.unit.Assert;
+import dev.cajeta.xref.Keys;
+import cajeta.lang.String;
+
+/**
+ * [[Keys]]: both compiler spellings of a method collapse to
+ * `owner::name/argc`, and the arity count respects `(`/`<` nesting.
+ */
+public class KeysTest {
+
+    public KeysTest() { return; }
+
+    @Test
+    public void xrefSpellingCollapsesToArity() {
+        String k #= Keys.normalize("probe.Cond::both(int32,int32)");
+        Assert.equals("probe.Cond::both/2", k);
+    }
+
+    @Test
+    public void irSpellingCollapsesToTheSameKey() {
+        String k #= Keys.normalize("probe.Cond::both(b:int32,a:int32)");
+        Assert.equals("probe.Cond::both/2", k);
+    }
+
+    /** The nesting counter FIRES: a comma inside `<>` is not a boundary. */
+    @Test
+    public void templateArgumentCommaIsNotAParameterBoundary() {
+        String k #= Keys.normalize("p.C::m(HashMap<int32,int64>,int32)");
+        Assert.equals("p.C::m/2", k);
+    }
+
+    /** The nesting counter does NOT fire: a top-level comma is a boundary. */
+    @Test
+    public void topLevelCommaIsAParameterBoundary() {
+        String k #= Keys.normalize("p.C::m(int32,int64,int32)");
+        Assert.equals("p.C::m/3", k);
+    }
+
+    @Test
+    public void nestedParenthesesDoNotEndTheParameterList() {
+        String k #= Keys.normalize("p.C::m(fn(int32,int32),int64)");
+        Assert.equals("p.C::m/2", k);
+    }
+
+    @Test
+    public void emptyParameterListYieldsSlashZero() {
+        String k #= Keys.normalize("p.C::m()");
+        Assert.equals("p.C::m/0", k);
+    }
+
+    @Test
+    public void inputWithoutAParameterListPassesThrough() {
+        String k #= Keys.normalize("p.C::field");
+        Assert.equals("p.C::field", k);
+    }
+
+    @Test
+    public void receiverPointerCountsAsAnArgument() {
+        String k #= Keys.normalize("cajeta.lang.String::substring(pointer,int32,int32)");
+        Assert.equals("cajeta.lang.String::substring/3", k);
+    }
+
+    @Test
+    public void keyOfJoinsOwnerAndMethod() {
+        String k #= Keys.keyOf("probe.Cond", "both(int32,int32)");
+        Assert.equals("probe.Cond::both/2", k);
+    }
+
+    @Test
+    public void keyOfWithoutAParameterListStillJoins() {
+        String k #= Keys.keyOf("probe.Cond", "both");
+        Assert.equals("probe.Cond::both", k);
+    }
+
+    /** Arity renders through the multi-digit path of the decimal writer. */
+    @Test
+    public void arityRendersWithMoreThanOneDigit() {
+        String k #= Keys.normalize("p.C::m(a,b,c,d,e,f,g,h,i,j,k,l)");
+        Assert.equals("p.C::m/12", k);
+    }
+
+    /** Two same-arity overloads collapse — the deliberate bias, pinned. */
+    @Test
+    public void sameArityOverloadsCollapseToOneKey() {
+        String a #= Keys.normalize("p.C::m(int32,int32)");
+        String b #= Keys.normalize("p.C::m(cajeta.lang.String,float64)");
+        Assert.equals(a, b);
+    }
+}

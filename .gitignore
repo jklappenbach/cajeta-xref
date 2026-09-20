@@ -2,3 +2,4 @@
 build/
 *.cja
 .cajeta/
+tmp/
