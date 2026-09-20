@@ -1,5 +1,7 @@
 {
-    // Library starter — what `cajeta init library` writes.
+    // dev.cajeta.xref — the compiler's `--emit-xref` cross-reference index as
+    // a typed library: normalized `owner::name/argc` symbol keys, call edges,
+    // the override relation, and method declarations.
     //
     // A LIBRARY project has NO `main` / no `entry-method`: it compiles to a
     // reusable `.cja` archive that other projects depend on (via
@@ -7,21 +9,47 @@
     // structural difference from the `basic` (binary) archetype is the
     // absence of `settings.build.entry-method` — with no entry point the
     // build action emits a `.cja` library instead of an exe.
+    //
+    // Why each cut happened, newest first:
+    //
+    //   0.2.0 — the first cut with a gate behind it. 0.1.0 shipped with the
+    //     starter's `dev-dependencies` and `test` task untouched, so `cajeta
+    //     test` had never once run; the suite added under src/test found
+    //     XrefDoc.parseFile SEGV on a missing path, against its own doc
+    //     comment, because File.readAllBytes answers NULL rather than
+    //     throwing. Measured on the released v0.28.0 and v0.27.0 toolchains
+    //     alike, so it is a defect of this package and not of either.
+    //     MINOR rather than PATCH because the declared capability set changes
+    //     with it, from the starter's empty list to `filesystem`, and that set
+    //     is unioned into every consumer's required capabilities.
+    //
+    // There is deliberately NO `settings.toolchain` pin. The fleet's rule for
+    // that block is that a stale value is a false claim about what builds, and
+    // a claim of 0.28.0 would be exactly that: both the library and the whole
+    // test suite were MEASURED green on the released v0.27.0 as well
+    // (25 xref tests, 0 failed), so nothing in this tree sets a 0.28.0 floor.
+    // Add the block when something here actually needs one, and name it.
 
     "details": {
         "name":               "dev.cajeta.xref",
-        "version":            "0.1.0",
-        "description":        "Single-package library starter (.cja archive)",
+        "version":            "0.2.0",
+        "description":        "cajeta-xref — the compiler's --emit-xref cross-reference index as a typed library",
         "license":            "Apache-2.0",
-        "authors":            ["sample"],
+        "authors":            ["Julian Klappenbach"],
         "cajeta-lang-version": "1.0"
     },
 
     "settings": {
-        // Declare only what the library's public API actually needs. A
-        // pure-computation library may need none at all; capabilities are
-        // re-validated against the consumer's manifest at the point of use.
-        "capabilities": [],
+        // Declare only what the library's public API actually needs;
+        // capabilities are re-validated against the consumer's manifest at the
+        // point of use, and they are unioned into the consumer's required set.
+        //
+        // `filesystem`, not the starter's empty list: `XrefDoc.parseFile`
+        // reads the document off disk (File.readAllBytes, XrefDoc.cajeta:182),
+        // which is the library's entire entry point. 0.1.0 published an empty
+        // list beside that call, so a consumer reading this manifest to decide
+        // what to grant was told the wrong thing.
+        "capabilities": ["filesystem"],
 
         // Third-party runtime dependencies. The core stdlib (cajeta.lang,
         // cajeta.io, cajeta.codec, …) is built into the toolchain — neither
