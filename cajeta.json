@@ -23,7 +23,7 @@
     //     with it, from the starter's empty list to `filesystem`, and that set
     //     is unioned into every consumer's required capabilities.
     //     Still unreleased: Olla serves 0.1.0. The v0.29.0 sweep's only change
-    //     here is the dev-dependency correction below, which is test-only and
+    //     here is the dev-dependency raise below, which is test-only and
     //     invisible to a consumer, so it lands inside this same unshipped cut
     //     instead of inventing a 0.2.1 over a version nobody can fetch yet.
     //
@@ -35,12 +35,15 @@
     // Add the block when something here actually needs one, and name it.
     //
     // Re-measured for the v0.29.0 fleet sweep, and the answer is unchanged, so
-    // no pin is added. The library builds clean on released v0.29.0, and with a
-    // compilable cajeta-unit handed in the suite is 28 passed, 0 failed, 1
-    // skipped on v0.29.0 and 28 passed, 0 failed, 1 skipped on v0.28.0 from
-    // this same tree. "It is the latest release" is not a floor. The one thing
-    // v0.29.0 refuses is the published cajeta-unit 0.2.5, and that is a floor
-    // on that dev-dependency rather than on this package.
+    // no pin is added. Built and gated with the released v0.29.0 binary, the
+    // x86_64-linux-gnu asset the release index names, sha256 f634658e550c,
+    // the suite is 28 passed, 0 failed, 1 skipped, and this same tree with
+    // this same dev-dependency is 28 passed, 0 failed, 1 skipped on released
+    // v0.28.0. Nothing here needs anything v0.29.0 added, so "it is the
+    // latest release" is not a floor and a pin would be exactly the false
+    // claim this block forbids. What v0.29.0 did refuse was the published
+    // cajeta-unit 0.2.5, and that was a floor on the dev-dependency below
+    // rather than on this package.
 
     "details": {
         "name":               "dev.cajeta.xref",
@@ -76,28 +79,30 @@
         // not found"), so the pin resolved to nothing and the test task had no
         // test binary to run. The fleet's test dependency is dev.cajeta.unit.
         //
-        // The pin is 0.2.5, the newest version Olla actually serves, and the
-        // gate it produces is RED. 0.2.5 was cut one commit before cajeta-unit's
-        // own ownership fix, so compiling it fails the whole test build with
-        // CAJETA_ERROR_CAPTURED_BORROW_PARAM on `PredMatcher.pred` before a
-        // single test runs. Measured on released v0.29.0 and on v0.28.0 alike,
-        // so this is not a v0.29 regression. A classpath `.cja` carries its
-        // cajeta sources and is recompiled by whatever toolchain consumes it,
-        // which is how a published archive goes stale against a new check.
+        // The pin is 0.3.0, published 2026-09-21 and served by /v2/resolve,
+        // so every consumer and every CI box can fetch the exact archive that
+        // was gated here. It replaces 0.2.5, which was the newest version the
+        // registry served until today and which made this gate RED: 0.2.5 was
+        // cut one commit before cajeta-unit's own ownership fix, so compiling
+        // it failed the whole test build with CAJETA_ERROR_CAPTURED_BORROW_PARAM
+        // on `PredMatcher.pred` before a single test ran, on released v0.29.0
+        // and on v0.28.0 alike. A classpath `.cja` carries its cajeta sources
+        // and is recompiled by whatever toolchain consumes it, which is how a
+        // published archive goes stale against a check that did not exist when
+        // it was cut, and why the fix is an archive cut by the current
+        // toolchain rather than a workaround here.
         //
-        // A local commit had raised this pin to 0.2.6, which does gate green,
-        // but 0.2.6 has never been published. /v2/resolve answers 404 for it,
-        // and the only copy on this machine is a working build under tmp/. A
-        // pin nobody else can resolve is worse than a red gate, because it
-        // fails every consumer and CI at fetch time while looking green on the
-        // one box that happens to hold the archive, so the pin comes back down
-        // to what the registry serves.
+        // 0.2.6 was never the answer. It gated green on this box but was never
+        // published, /v2/resolve still answers 404 for it, and a pin nobody
+        // else can resolve fails every consumer at fetch time while looking
+        // green on the one machine that happens to hold the archive.
         //
-        // This unblocks when a cajeta-unit past 0.2.5 reaches Olla, and nothing
-        // in this package has to change for it. With a 0.2.6 archive handed in
-        // via UNIT_CJA the suite is 28 passed, 0 failed, 1 skipped on v0.29.0.
+        // Gated with 0.3.0 fetched from Olla on the released v0.29.0 binary:
+        // 28 passed, 0 failed, 1 skipped. A real gate rather than a vacuous
+        // one, measured: three deliberately flipped expectations report 25
+        // passed, 3 failed and exit 1.
         "dev-dependencies": {
-            "dev.cajeta.unit": "0.2.5"
+            "dev.cajeta.unit": "0.3.0"
         },
 
         "repositories": [
