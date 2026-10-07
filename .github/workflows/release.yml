@@ -1,0 +1,26 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Builds + tests the library on a main push; on a v* tag also publishes a
+# GitHub Release and a signed publish to Olla (olla.cajeta.dev). Logic lives in
+# the reusable workflow. No `pull_request:` trigger by design: changes land by
+# pushing straight to main, so a PR trigger would never fire.
+jobs:
+  release:
+    uses: jklappenbach/cajeta/.github/workflows/lib-release.yml@main
+    with:
+      # The suite reads back the index this compiler emits for the library's own
+      # sources, so the pin is the format version the reader is checked against.
+      cajeta-version: v0.36.0
+      # Builds the library, fetches the pinned cajeta-unit from Olla, emits the
+      # self index, then runs the suite.
+      test-command: ./run-tests.sh
+    secrets: inherit

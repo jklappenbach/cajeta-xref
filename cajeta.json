@@ -12,6 +12,15 @@
     //
     // Why each cut happened, newest first:
     //
+    //   0.3.0 — the whole of format 1. 0.2.x read only calls, overrides and
+    //     method declarations, and its test fixture still used inheritance and
+    //     reference shapes the compiler stopped writing. Every section is read
+    //     now (all declaration kinds, inheritance, references, call columns and
+    //     dispatch), strings are JSON-decoded, and a document whose major
+    //     version is not 1 is refused. The suite reads back the index the
+    //     compiler emits for this library's own sources. MINOR: new API, and
+    //     the refusal. Published from its own release workflow from here on.
+    //
     //   0.2.2 — the v0.36.0 fleet sweep. No source change: v0.36.0 reports no
     //     violation here. Only the cajeta-unit dev pin moves, to 0.3.4.
     //
@@ -53,7 +62,7 @@
 
     "details": {
         "name":               "dev.cajeta.xref",
-        "version":            "0.2.2",
+        "version":            "0.3.0",
         "description":        "cajeta-xref — the compiler's --emit-xref cross-reference index as a typed library",
         "license":            "Apache-2.0",
         "authors":            ["Julian Klappenbach"],

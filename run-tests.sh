@@ -86,6 +86,12 @@ echo ">> building the test binary"
     -o "$out/xreftests" \
     dev.cajeta.xref.selftest.TestMain.run "$here/src/test/cajeta" "$out" >/dev/null
 
+# The index the compiler emits today for this library's own sources: the suite reads it back,
+# so a change in the format fails here before it reaches a consumer.
+mkdir -p "$here/tmp"
+"$CAJETA" --lint "$here/src/main/cajeta" --emit-xref="$here/tmp/xref-self.json" >/dev/null
+[[ -s "$here/tmp/xref-self.json" ]] || { echo "the compiler wrote no xref index" >&2; exit 1; }
+
 # The suite writes its fixtures to tmp/ relative to the working directory.
 cd "$here"
 "$out/xreftests"

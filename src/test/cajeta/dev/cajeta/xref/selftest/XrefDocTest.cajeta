@@ -33,15 +33,15 @@ public class XrefDocTest {
              + "  \"version\": {\"major\": 1, \"minor\": 0},\n"
              + "  \"sourceRoot\": \"src/main/cajeta/\",\n"
              + "  \"declarations\": [\n"
-             + "    {\"fqn\": \"p.C\", \"kind\": \"class\", \"file\": \"p/C.cajeta\", \"line\": 3, \"col\": 11},\n"
+             + "    {\"fqn\": \"p.C\", \"kind\": \"class\", \"file\": \"p/C.cajeta\", \"line\": 3, \"col\": 11, \"modifiers\": [\"public\", \"abstract\"]},\n"
              + "    {\"fqn\": \"p.C.both\", \"kind\": \"method\", \"file\": \"p/C.cajeta\", \"line\": 9, \"col\": 4, \"owner\": \"p.C\", \"signature\": \"int32 both(int32 a, int32 b)\", \"overloadKey\": \"p.C::both(int32,int32)\"},\n"
              + "    {\"fqn\": \"p.C.one\", \"kind\": \"method\", \"file\": \"p/C.cajeta\", \"line\": 17, \"col\": 4, \"owner\": \"p.C\", \"signature\": \"void one(cajeta.lang.String s)\", \"overloadKey\": \"p.C::one(cajeta.lang.String)\"}\n"
              + "  ],\n"
              + "  \"inheritance\": [\n"
-             + "    {\"type\": \"p.D\", \"extends\": \"p.C\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
+             + "    {\"child\": \"p.D\", \"parent\": \"p.C\", \"kind\": \"extends\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
              + "  ],\n"
              + "  \"references\": [\n"
-             + "    {\"symbol\": \"p.C\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
+             + "    {\"target\": \"p.C\", \"kind\": \"inherit\", \"from\": \"p.D\", \"file\": \"p/D.cajeta\", \"line\": 3, \"col\": 20}\n"
              + "  ],\n"
              + "  \"overrides\": [\n"
              + "    {\"method\": \"p.D::both(pointer,int32,int32)\", \"overrides\": \"p.C::both(pointer,int32,int32)\", \"file\": \"p/D.cajeta\", \"line\": 5, \"col\": 16}\n"
@@ -49,7 +49,7 @@ public class XrefDocTest {
              + "  \"calls\": [\n"
              + "    {\"callee\": \"p.C::both(int32,int32)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 4, \"col\": 9},\n"
              + "    {\"callee\": \"p.C::both(b:int32,a:int32)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 5, \"col\": 9},\n"
-             + "    {\"callee\": \"p.C::one(cajeta.lang.String)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 6, \"col\": 9}\n"
+             + "    {\"callee\": \"p.C::one(cajeta.lang.String)\", \"caller\": \"p.M::run()\", \"file\": \"p/M.cajeta\", \"line\": 6, \"col\": 9, \"virtual\": true}\n"
              + "  ]\n"
              + "}\n";
     }
@@ -132,12 +132,9 @@ public class XrefDocTest {
         Assert.equals((int64) 0, (int64) d.callerCount("p.Z::absent/0"));
     }
 
-    /**
-     * `inheritance` and `references` are shaped like records and sit at the
-     * same depth; nothing from them may reach the three stores.
-     */
+    /** Each section lands in its own store; the method store stays method-only. */
     @Test
-    public void unmaterializedSectionsStayInvisible() {
+    public void eachSectionLandsInItsOwnStore() {
         String body #= XrefDocTest.fullDoc();
         String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
         XrefDoc d #= XrefDoc.parseFile(path);
@@ -145,6 +142,9 @@ public class XrefDocTest {
         Assert.equals((int64) 3, (int64) d.callCount());
         Assert.equals((int64) 1, (int64) d.overrideCount());
         Assert.equals((int64) 2, (int64) d.declCount());
+        Assert.equals((int64) 3, (int64) d.symbolCount());
+        Assert.equals((int64) 1, (int64) d.inheritanceCount());
+        Assert.equals((int64) 1, (int64) d.referenceCount());
     }
 
     @Test
@@ -230,5 +230,125 @@ public class XrefDocTest {
         Assert.equals((int64) 0, (int64) d.callCount());
         Assert.equals((int64) 0, (int64) d.overrideCount());
         Assert.equals((int64) 0, (int64) d.declCount());
+    }
+
+    @Test
+    public void versionAndSourceRootAreRead() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.isTrue(d.isSupported());
+        Assert.equals((int64) 1, d.majorVersion());
+        Assert.equals((int64) 0, d.minorVersion());
+        Assert.equals("src/main/cajeta/", d.sourceRoot());
+    }
+
+    /** A major the reader does not know is refused: an empty document, not a misread one. */
+    @Test
+    public void anUnknownMajorIsRefused() {
+        String body #= "{\"version\": {\"major\": 2, \"minor\": 0}, \"declarations\": [], \"calls\": [\n"
+             + "  {\"callee\": \"p.C::t()\", \"caller\": \"p.M::c()\", \"file\": \"f.cajeta\", \"line\": 3, \"col\": 1}\n"
+             + "]}\n";
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-major2.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.isFalse(d.isSupported());
+        Assert.equals((int64) 2, d.majorVersion());
+        Assert.equals((int64) 0, (int64) d.callCount());
+        Assert.equals((int64) 0, (int64) d.symbolCount());
+    }
+
+    /** Every declaring form is a symbol, with its kind, owner, modifiers and site. */
+    @Test
+    public void everyDeclarationIsASymbol() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals("p.C", d.symbolFqnAt(0));
+        Assert.equals("class", d.symbolKindAt(0));
+        Assert.equals("public abstract", d.symbolModifiersAt(0));
+        Assert.equals("", d.symbolKeyAt(0));
+        Assert.equals((int64) 3, d.symbolLineAt(0));
+        Assert.equals((int64) 11, d.symbolColAt(0));
+        Assert.equals("p.C", d.symbolOwnerAt(1));
+        Assert.equals("method", d.symbolKindAt(1));
+        Assert.equals("p.C::both/2", d.symbolKeyAt(1));
+        Assert.equals("int32 both(int32 a, int32 b)", d.symbolSignatureAt(1));
+        Assert.equals("p/C.cajeta", d.symbolFileAt(1));
+        Assert.equals((int64) 2, (int64) d.symbolIndexOf("p.C.one"));
+        Assert.equals((int64) -1, (int64) d.symbolIndexOf("p.Z"));
+    }
+
+    @Test
+    public void inheritanceEdgesAreRead() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals("p.D", d.inheritanceChildAt(0));
+        Assert.equals("p.C", d.inheritanceParentAt(0));
+        Assert.equals("extends", d.inheritanceKindAt(0));
+        Assert.equals("p/D.cajeta", d.inheritanceFileAt(0));
+        Assert.equals((int64) 3, d.inheritanceLineAt(0));
+    }
+
+    @Test
+    public void referencesAreRead() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals("p.C", d.referenceTargetAt(0));
+        Assert.equals("inherit", d.referenceKindAt(0));
+        Assert.equals("p.D", d.referenceFromAt(0));
+        Assert.equals("p/D.cajeta", d.referenceFileAt(0));
+        Assert.equals((int64) 3, d.referenceLineAt(0));
+        Assert.equals((int64) 20, d.referenceColAt(0));
+    }
+
+    /** A call keeps its column and whether it dispatches virtually; the default is not virtual. */
+    @Test
+    public void callsKeepColumnAndDispatch() {
+        String body #= XrefDocTest.fullDoc();
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-full.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals((int64) 9, d.callColAt(0));
+        Assert.isFalse(d.callIsVirtualAt(0));
+        Assert.isTrue(d.callIsVirtualAt(2));
+        Assert.equals("p/D.cajeta", d.overrideFileAt(0));
+        Assert.equals((int64) 5, d.overrideLineAt(0));
+    }
+
+    /** JSON escapes are decoded, so a Windows path arrives with single backslashes. */
+    @Test
+    public void escapedStringsAreDecoded() {
+        String body #= "{\"version\": {\"major\": 1, \"minor\": 0}, \"declarations\": [\n"
+             + "  {\"fqn\": \"p.Q\", \"kind\": \"class\", \"file\": \"p\\\\Q.cajeta\", \"line\": 1, \"col\": 1}\n"
+             + "]}\n";
+        String path #= XrefDocTest.fixture("tmp/xref-selftest-escapes.json", body);
+        XrefDoc d #= XrefDoc.parseFile(path);
+
+        Assert.equals("p\\Q.cajeta", d.symbolFileAt(0));
+    }
+
+    /**
+     * The index the compiler emits today for this library's own sources, written by
+     * run-tests.sh, reads back: drift in the format fails here rather than in a consumer.
+     */
+    @Test
+    public void readsTheCompilersOwnIndex() {
+        XrefDoc d #= XrefDoc.parseFile("tmp/xref-self.json");
+
+        Assert.isTrue(d.isSupported());
+        Assert.equals((int64) 1, d.majorVersion());
+        int32 doc = d.symbolIndexOf("dev.cajeta.xref.XrefDoc");
+        Assert.isTrue(doc >= 0);
+        Assert.equals("class", d.symbolKindAt(doc));
+        Assert.isTrue(d.callerCount("dev.cajeta.xref.Keys::normalize/1") > 0);
+        Assert.isTrue(d.referenceCount() > 0);
+        Assert.isTrue(d.inheritanceCount() > 0);
     }
 }

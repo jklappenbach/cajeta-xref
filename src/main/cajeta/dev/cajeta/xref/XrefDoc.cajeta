@@ -8,38 +8,48 @@ import cajeta.lang.StringBuilder;
 
 /**
  * A parsed `--emit-xref` document: the compiler's cross-reference index as a
- * typed model — call edges, override relations, and method declarations, all
- * keyed with [[Keys]]' normalized `owner::name/argc` form.
+ * typed model of every section of format 1 — declarations, inheritance,
+ * references, overrides and calls (specs/schemas/cajeta-xref-v1.schema.json in
+ * the compiler repository). Method keys use [[Keys]]' normalized
+ * `owner::name/argc` form.
  *
  * ## Who this is for
  *
- * Every tool that consumes the xref wants the same three things: the call
- * graph's edges, the override (virtual-dispatch) relation, and a way to map a
- * key back to a human signature and declaration site. IDE symbol services,
- * documentation generators, dead-code analyzers (cajeta-coco) and lint rules
- * should all read the document through this one parser, so the format and its
- * reader evolve together instead of each tool drifting on its own.
+ * IDE symbol services, documentation generators, dead-code analyzers
+ * (cajeta-coco) and lint rules should all read the document through this one
+ * parser, so the format and its reader evolve together instead of each tool
+ * drifting on its own.
  *
  * ## How it reads
  *
- * Streaming (`JsonReader`, the pull tokenizer) in two passes: pass A counts
- * records per section so storage is sized exactly; pass B fills. The DOM tier
- * is deliberately avoided. Only `calls`, `overrides` and method-grain
- * `declarations` are materialized — other sections flow through the depth
- * accounting untouched. Malformed or incomplete records are skipped, not
- * fatal: a partial graph should degrade a consumer's analysis, never abort it.
+ * Streaming (`JsonReader`, the pull tokenizer) in two passes: pass A reads the
+ * version and counts records per section so storage is sized exactly; pass B
+ * fills. A document whose major version this reader does not know is refused:
+ * it reads as empty and [[isSupported]] is false. Malformed or incomplete
+ * records are skipped, not fatal: a partial graph should degrade a consumer's
+ * analysis, never abort it.
  */
 public class XrefDoc {
-    /** Call edges, parallel: normalized caller / callee, call-site file+line. */
+    int64 major;
+    int64 minor;
+    boolean supported;
+    String root;
+
+    /** Call edges, parallel: normalized caller / callee, call-site file, line, column, dispatch. */
     ArrayList<String> edgeFrom;
     ArrayList<String> edgeTo;
     ArrayList<String> edgeFile;
     int64[] edgeLine;
+    int64[] edgeCol;
+    int8[] edgeVirtual;
     int32 edgeN;
 
-    /** Override edges: base-method key -> overriding-method key. */
+    /** Override edges: base-method key -> overriding-method key, at the override's site. */
     ArrayList<String> ovrBase;
     ArrayList<String> ovrImpl;
+    ArrayList<String> ovrFile;
+    int64[] ovrLine;
+    int32 ovrN;
 
     /** Method declarations: key -> human signature + declaration site. */
     ArrayList<String> declKey;
@@ -48,39 +58,139 @@ public class XrefDoc {
     int64[] declLine;
     int32 declN;
 
-    XrefDoc(int32 edges, int32 ovrs, int32 decls) {
+    /** Every declaring form, parallel. */
+    ArrayList<String> symFqn;
+    ArrayList<String> symKind;
+    ArrayList<String> symOwner;
+    ArrayList<String> symSig;
+    ArrayList<String> symKey;
+    ArrayList<String> symMods;
+    ArrayList<String> symFile;
+    int64[] symLine;
+    int64[] symCol;
+    int32 symN;
+
+    /** extends / implements edges with the parent resolved. */
+    ArrayList<String> inhChild;
+    ArrayList<String> inhParent;
+    ArrayList<String> inhKind;
+    ArrayList<String> inhFile;
+    int64[] inhLine;
+    int32 inhN;
+
+    /** Use sites and the declarations they bind to. */
+    ArrayList<String> refTarget;
+    ArrayList<String> refKind;
+    ArrayList<String> refFrom;
+    ArrayList<String> refFile;
+    int64[] refLine;
+    int64[] refCol;
+    int32 refN;
+
+    XrefDoc(int32 edges, int32 ovrs, int32 decls, int32 inhs, int32 refs) {
+        this.major = 0;
+        this.minor = 0;
+        this.supported = true;
+        this.root = "";
         this.edgeFrom #= heap ArrayList<String>();
         this.edgeTo #= heap ArrayList<String>();
         this.edgeFile #= heap ArrayList<String>();
-        int32 ec = edges;
-        if (ec < 1) { ec = 1; }
-        this.edgeLine #= heap int64[ec];
+        this.edgeLine #= XrefDoc.numbers(edges);
+        this.edgeCol #= XrefDoc.numbers(edges);
+        this.edgeVirtual #= XrefDoc.flags(edges);
         this.edgeN = 0;
         this.ovrBase #= heap ArrayList<String>();
         this.ovrImpl #= heap ArrayList<String>();
+        this.ovrFile #= heap ArrayList<String>();
+        this.ovrLine #= XrefDoc.numbers(ovrs);
+        this.ovrN = 0;
         this.declKey #= heap ArrayList<String>();
         this.declSig #= heap ArrayList<String>();
         this.declFile #= heap ArrayList<String>();
-        int32 dc = decls;
-        if (dc < 1) { dc = 1; }
-        this.declLine #= heap int64[dc];
+        this.declLine #= XrefDoc.numbers(decls);
         this.declN = 0;
+        this.symFqn #= heap ArrayList<String>();
+        this.symKind #= heap ArrayList<String>();
+        this.symOwner #= heap ArrayList<String>();
+        this.symSig #= heap ArrayList<String>();
+        this.symKey #= heap ArrayList<String>();
+        this.symMods #= heap ArrayList<String>();
+        this.symFile #= heap ArrayList<String>();
+        this.symLine #= XrefDoc.numbers(decls);
+        this.symCol #= XrefDoc.numbers(decls);
+        this.symN = 0;
+        this.inhChild #= heap ArrayList<String>();
+        this.inhParent #= heap ArrayList<String>();
+        this.inhKind #= heap ArrayList<String>();
+        this.inhFile #= heap ArrayList<String>();
+        this.inhLine #= XrefDoc.numbers(inhs);
+        this.inhN = 0;
+        this.refTarget #= heap ArrayList<String>();
+        this.refKind #= heap ArrayList<String>();
+        this.refFrom #= heap ArrayList<String>();
+        this.refFile #= heap ArrayList<String>();
+        this.refLine #= XrefDoc.numbers(refs);
+        this.refCol #= XrefDoc.numbers(refs);
+        this.refN = 0;
     }
 
-    // ── the read surface ───────────────────────────────────────
+    static #int64[] numbers(int32 n) {
+        int32 c = n;
+        if (c < 1) { c = 1; }
+        return heap int64[c];
+    }
+
+    static #int8[] flags(int32 n) {
+        int32 c = n;
+        if (c < 1) { c = 1; }
+        return heap int8[c];
+    }
+
+    static int64 numberAt(int64[] a, int32 n, int32 i) {
+        if (i < 0 || i >= n) { return 0; }
+        return a[i];
+    }
+
+    static #String copy(String s) {
+        return s.substring(0, s.byteLength());
+    }
+
+    // ── the document ───────────────────────────────────────────
+
+    /** The format's major version, or 0 when the document carries none. */
+    public int64 majorVersion() { return this.major; }
+    public int64 minorVersion() { return this.minor; }
+
+    /** False when the document's major version is one this reader does not know. */
+    public boolean isSupported() { return this.supported; }
+
+    /** The root every `file` is relative to, or empty. */
+    public String sourceRoot() { return this.root; }
+
+    // ── calls ──────────────────────────────────────────────────
 
     public int32 callCount() { return this.edgeFrom.count(); }
     public String callerAt(int32 i) { return this.edgeFrom.get(i); }
     public String calleeAt(int32 i) { return this.edgeTo.get(i); }
     public String callFileAt(int32 i) { return this.edgeFile.get(i); }
-    public int64 callLineAt(int32 i) {
-        if (i < 0 || i >= this.edgeN) { return 0; }
-        return this.edgeLine[i];
+    public int64 callLineAt(int32 i) { return XrefDoc.numberAt(this.edgeLine, this.edgeN, i); }
+    public int64 callColAt(int32 i) { return XrefDoc.numberAt(this.edgeCol, this.edgeN, i); }
+
+    /** True when the call dispatches through a vtable. */
+    public boolean callIsVirtualAt(int32 i) {
+        if (i < 0 || i >= this.edgeN) { return false; }
+        return this.edgeVirtual[i] != 0;
     }
+
+    // ── overrides ──────────────────────────────────────────────
 
     public int32 overrideCount() { return this.ovrBase.count(); }
     public String overrideBaseAt(int32 i) { return this.ovrBase.get(i); }
     public String overrideImplAt(int32 i) { return this.ovrImpl.get(i); }
+    public String overrideFileAt(int32 i) { return this.ovrFile.get(i); }
+    public int64 overrideLineAt(int32 i) { return XrefDoc.numberAt(this.ovrLine, this.ovrN, i); }
+
+    // ── method declarations ────────────────────────────────────
 
     public int32 declCount() { return this.declKey.count(); }
     public String declKeyAt(int32 i) { return this.declKey.get(i); }
@@ -113,6 +223,62 @@ public class XrefDoc {
         }
         return "";
     }
+
+    // ── every declaring form ───────────────────────────────────
+
+    public int32 symbolCount() { return this.symFqn.count(); }
+    public String symbolFqnAt(int32 i) { return this.symFqn.get(i); }
+
+    /** `class`, `interface`, `enum`, `record`, `method`, `field` and the other schema kinds. */
+    public String symbolKindAt(int32 i) { return this.symKind.get(i); }
+    public String symbolOwnerAt(int32 i) { return this.symOwner.get(i); }
+    public String symbolSignatureAt(int32 i) { return this.symSig.get(i); }
+
+    /** The normalized method key for a method or constructor, empty otherwise. */
+    public String symbolKeyAt(int32 i) { return this.symKey.get(i); }
+
+    /** The modifiers in source order, space separated. */
+    public String symbolModifiersAt(int32 i) { return this.symMods.get(i); }
+    public String symbolFileAt(int32 i) { return this.symFile.get(i); }
+    public int64 symbolLineAt(int32 i) { return XrefDoc.numberAt(this.symLine, this.symN, i); }
+    public int64 symbolColAt(int32 i) { return XrefDoc.numberAt(this.symCol, this.symN, i); }
+
+    /** The index of the first symbol named `fqn`, or -1. */
+    public int32 symbolIndexOf(String fqn) {
+        int32 i = 0;
+        while (i < this.symFqn.count()) {
+            if (this.symFqn.get(i).equals(fqn)) { return i; }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    // ── inheritance ────────────────────────────────────────────
+
+    public int32 inheritanceCount() { return this.inhChild.count(); }
+    public String inheritanceChildAt(int32 i) { return this.inhChild.get(i); }
+    public String inheritanceParentAt(int32 i) { return this.inhParent.get(i); }
+
+    /** `extends` or `implements`. */
+    public String inheritanceKindAt(int32 i) { return this.inhKind.get(i); }
+    public String inheritanceFileAt(int32 i) { return this.inhFile.get(i); }
+    public int64 inheritanceLineAt(int32 i) { return XrefDoc.numberAt(this.inhLine, this.inhN, i); }
+
+    // ── references ─────────────────────────────────────────────
+
+    public int32 referenceCount() { return this.refTarget.count(); }
+    public String referenceTargetAt(int32 i) { return this.refTarget.get(i); }
+
+    /** `type`, `call`, `fieldRead`, `fieldWrite`, `variableRead`, `variableWrite`, `import` or `inherit`. */
+    public String referenceKindAt(int32 i) { return this.refKind.get(i); }
+
+    /** The declaration the use sits in, or empty. */
+    public String referenceFromAt(int32 i) { return this.refFrom.get(i); }
+    public String referenceFileAt(int32 i) { return this.refFile.get(i); }
+    public int64 referenceLineAt(int32 i) { return XrefDoc.numberAt(this.refLine, this.refN, i); }
+    public int64 referenceColAt(int32 i) { return XrefDoc.numberAt(this.refCol, this.refN, i); }
+
+    // ── call-graph queries ─────────────────────────────────────
 
     /** Number of call edges naming `key` as callee. */
     public int32 callerCount(String key) {
@@ -158,10 +324,18 @@ public class XrefDoc {
     // ── parsing ────────────────────────────────────────────────
 
     // JsonToken ordinals consumed as int32 tags (0 START_OBJECT, 1 END_OBJECT,
-    // 2 START_ARRAY, 3 END_ARRAY, 4 KEY, 5 STRING, 6 NUMBER, 9 END).
+    // 2 START_ARRAY, 3 END_ARRAY, 4 KEY, 5 STRING, 6 NUMBER, 7 BOOLEAN, 9 END).
     static int32 tok(JsonReader r) {
         return (int32) r.next();
     }
+
+    // Record field tags beyond the string slots 1 to 6.
+    static int32 kLine() { return 10; }
+    static int32 kCol() { return 11; }
+    static int32 kVirtual() { return 12; }
+    static int32 kModifiers() { return 13; }
+    static int32 kMajor() { return 20; }
+    static int32 kMinor() { return 21; }
 
     /** Parse `path`. A missing or empty file yields an empty document. */
     public static #XrefDoc parseFile(String path) {
@@ -183,20 +357,28 @@ public class XrefDoc {
         int64 n = 0;
         if (buf != null) { n = buf.count(); }
 
-        // Pass A: counts.
+        // Pass A: the version and the record counts.
         int64 nCalls = 0;
         int64 nOvrs = 0;
         int64 nDecls = 0;
+        int64 nInhs = 0;
+        int64 nRefs = 0;
+        int64 major = 0;
+        int64 minor = 0;
+        boolean versioned = false;
         if (n > 0) {
             JsonReader r = stack JsonReader(buf, n);
             int32 depth = 0;
             int32 section = 0;
+            int32 field = 0;
             int32 t = XrefDoc.tok(r);
             while (t != 9) {
                 if (t == 0) {
                     if (depth == 2 && section == 1) { nCalls = nCalls + 1; }
                     if (depth == 2 && section == 2) { nOvrs = nOvrs + 1; }
                     if (depth == 2 && section == 3) { nDecls = nDecls + 1; }
+                    if (depth == 2 && section == 4) { nInhs = nInhs + 1; }
+                    if (depth == 2 && section == 5) { nRefs = nRefs + 1; }
                     depth = depth + 1;
                 } else if (t == 1) {
                     depth = depth - 1;
@@ -209,43 +391,80 @@ public class XrefDoc {
                     if (depth == 1) {
                         String name #= r.currentString();
                         section = XrefDoc.sectionOf(name);
+                    } else if (depth == 2 && section == 6) {
+                        String name #= r.currentString();
+                        field = XrefDoc.versionFieldOf(name);
                     }
+                } else if (t == 6) {
+                    if (depth == 2 && section == 6) {
+                        if (field == XrefDoc.kMajor()) {
+                            major = r.currentNumberAsInt64();
+                            versioned = true;
+                        } else if (field == XrefDoc.kMinor()) {
+                            minor = r.currentNumberAsInt64();
+                        }
+                    }
+                    field = 0;
                 }
                 t = XrefDoc.tok(r);
             }
         }
 
-        XrefDoc d #= heap XrefDoc((int32) nCalls, (int32) nOvrs, (int32) nDecls);
+        if (versioned && major != 1) {
+            XrefDoc refused #= heap XrefDoc(0, 0, 0, 0, 0);
+            refused.major = major;
+            refused.minor = minor;
+            refused.supported = false;
+            return #refused;
+        }
+
+        XrefDoc d #= heap XrefDoc((int32) nCalls, (int32) nOvrs, (int32) nDecls,
+                                  (int32) nInhs, (int32) nRefs);
+        d.major = major;
+        d.minor = minor;
         if (n == 0) { return #d; }
 
-        // Pass B: fill. Record fields sit at depth 3; nested arrays inside a
-        // record (modifiers, params) push depth past 3 and fall out of the
-        // capture gate on their own.
+        // Pass B: fill. Record fields sit at depth 3; a declaration's modifiers
+        // are strings at depth 4; other nested values fall out of the gate.
         JsonReader r2 = stack JsonReader(buf, n);
         int32 depth = 0;
         int32 section = 0;
         int32 field = 0;
-        String f1 #= "";
-        String f2 #= "";
-        String f3 #= "";
-        int64 fLine = 0;
+        String v1 #= "";
+        String v2 #= "";
+        String v3 #= "";
+        String v4 #= "";
+        String v5 #= "";
+        String v6 #= "";
+        String mods #= "";
+        int64 vLine = 0;
+        int64 vCol = 0;
+        boolean vVirtual = false;
         int32 t = XrefDoc.tok(r2);
         while (t != 9) {
+            boolean keepField = false;
             if (t == 0) {
-                if (depth == 2 && section > 0) {
-                    f1 #= "";
-                    f2 #= "";
-                    f3 #= "";
-                    fLine = 0;
+                if (depth == 2 && section >= 1 && section <= 5) {
+                    v1 #= "";
+                    v2 #= "";
+                    v3 #= "";
+                    v4 #= "";
+                    v5 #= "";
+                    v6 #= "";
+                    mods #= "";
+                    vLine = 0;
+                    vCol = 0;
+                    vVirtual = false;
                 }
                 depth = depth + 1;
             } else if (t == 1) {
                 depth = depth - 1;
-                if (depth == 2 && section > 0) {
-                    XrefDoc.flush(d, section, f1, f2, f3, fLine);
+                if (depth == 2 && section >= 1 && section <= 5) {
+                    XrefDoc.flush(d, section, v1, v2, v3, v4, v5, v6, mods, vLine, vCol, vVirtual);
                 }
             } else if (t == 2) {
                 depth = depth + 1;
+                keepField = field == XrefDoc.kModifiers();
             } else if (t == 3) {
                 depth = depth - 1;
                 if (depth == 1) { section = 0; }
@@ -253,28 +472,35 @@ public class XrefDoc {
                 if (depth == 1) {
                     String name #= r2.currentString();
                     section = XrefDoc.sectionOf(name);
-                    field = 0;
-                } else if (depth == 3 && section > 0) {
+                } else if (depth == 3 && section >= 1 && section <= 5) {
                     String name #= r2.currentString();
                     field = XrefDoc.fieldOf(section, name);
-                } else {
-                    field = 0;
+                    keepField = true;
                 }
             } else if (t == 5) {
-                if (depth == 3 && section > 0) {
-                    if (field == 1) { f1 #= r2.currentString(); }
-                    else if (field == 2) { f2 #= r2.currentString(); }
-                    else if (field == 3) { f3 #= r2.currentString(); }
+                if (depth == 3 && section >= 1 && section <= 5) {
+                    if (field == 1) { v1 #= r2.currentDecodedString(); }
+                    else if (field == 2) { v2 #= r2.currentDecodedString(); }
+                    else if (field == 3) { v3 #= r2.currentDecodedString(); }
+                    else if (field == 4) { v4 #= r2.currentDecodedString(); }
+                    else if (field == 5) { v5 #= r2.currentDecodedString(); }
+                    else if (field == 6) { v6 #= r2.currentDecodedString(); }
+                } else if (depth == 4 && field == XrefDoc.kModifiers()) {
+                    String m #= r2.currentDecodedString();
+                    if (mods.byteLength() > 0) { mods #= mods + " " + m; }
+                    else { mods #= XrefDoc.copy(m); }
+                    keepField = true;
+                } else if (depth == 1 && section == 7) {
+                    String rootValue #= r2.currentDecodedString();
+                    d.root #= XrefDoc.copy(rootValue);
                 }
-                field = 0;
             } else if (t == 6) {
-                if (depth == 3 && section > 0 && field == 4) {
-                    fLine = r2.currentNumberAsInt64();
-                }
-                field = 0;
-            } else {
-                field = 0;
+                if (depth == 3 && field == XrefDoc.kLine()) { vLine = r2.currentNumberAsInt64(); }
+                else if (depth == 3 && field == XrefDoc.kCol()) { vCol = r2.currentNumberAsInt64(); }
+            } else if (t == 7) {
+                if (depth == 3 && field == XrefDoc.kVirtual()) { vVirtual = r2.currentBoolean(); }
             }
+            if (!keepField) { field = 0; }
             t = XrefDoc.tok(r2);
         }
         return #d;
@@ -284,52 +510,120 @@ public class XrefDoc {
         if (name.equals("calls"))        { return 1; }
         if (name.equals("overrides"))    { return 2; }
         if (name.equals("declarations")) { return 3; }
+        if (name.equals("inheritance"))  { return 4; }
+        if (name.equals("references"))   { return 5; }
+        if (name.equals("version"))      { return 6; }
+        if (name.equals("sourceRoot"))   { return 7; }
+        return 0;
+    }
+
+    static int32 versionFieldOf(String name) {
+        if (name.equals("major")) { return XrefDoc.kMajor(); }
+        if (name.equals("minor")) { return XrefDoc.kMinor(); }
         return 0;
     }
 
     static int32 fieldOf(int32 section, String name) {
+        if (name.equals("file")) { return 3; }
+        if (name.equals("line")) { return XrefDoc.kLine(); }
+        if (name.equals("col"))  { return XrefDoc.kCol(); }
         if (section == 1) {
-            if (name.equals("caller")) { return 1; }
-            if (name.equals("callee")) { return 2; }
-            if (name.equals("file"))   { return 3; }
-            if (name.equals("line"))   { return 4; }
+            if (name.equals("caller"))  { return 1; }
+            if (name.equals("callee"))  { return 2; }
+            if (name.equals("virtual")) { return XrefDoc.kVirtual(); }
         } else if (section == 2) {
             if (name.equals("method"))    { return 1; }
             if (name.equals("overrides")) { return 2; }
         } else if (section == 3) {
             if (name.equals("overloadKey")) { return 1; }
             if (name.equals("signature"))   { return 2; }
-            if (name.equals("file"))        { return 3; }
-            if (name.equals("line"))        { return 4; }
+            if (name.equals("fqn"))         { return 4; }
+            if (name.equals("kind"))        { return 5; }
+            if (name.equals("owner"))       { return 6; }
+            if (name.equals("modifiers"))   { return XrefDoc.kModifiers(); }
+        } else if (section == 4) {
+            if (name.equals("child"))  { return 1; }
+            if (name.equals("parent")) { return 2; }
+            if (name.equals("kind"))   { return 5; }
+        } else if (section == 5) {
+            if (name.equals("target")) { return 1; }
+            if (name.equals("from"))   { return 2; }
+            if (name.equals("kind"))   { return 5; }
         }
         return 0;
     }
 
-    static void flush(XrefDoc d, int32 section, String f1, String f2,
-                      String f3, int64 fLine) {
+    static void flush(XrefDoc d, int32 section, String v1, String v2, String v3,
+                      String v4, String v5, String v6, String mods,
+                      int64 line, int64 col, boolean isVirtual) {
         if (section == 1) {
-            if (f1.byteLength() > 0 && f2.byteLength() > 0) {
-                d.edgeFrom.add(Keys.normalize(f1));
-                d.edgeTo.add(Keys.normalize(f2));
-                d.edgeFile.add(f3.substring(0, f3.byteLength()));
+            if (v1.byteLength() > 0 && v2.byteLength() > 0) {
+                d.edgeFrom.add(Keys.normalize(v1));
+                d.edgeTo.add(Keys.normalize(v2));
+                d.edgeFile.add(XrefDoc.copy(v3));
                 if (d.edgeN < (int32) d.edgeLine.count()) {
-                    d.edgeLine[d.edgeN] = fLine;
+                    d.edgeLine[d.edgeN] = line;
+                    d.edgeCol[d.edgeN] = col;
+                    if (isVirtual) { d.edgeVirtual[d.edgeN] = 1; }
                     d.edgeN = d.edgeN + 1;
                 }
             }
         } else if (section == 2) {
-            if (f1.byteLength() > 0 && f2.byteLength() > 0) {
-                d.ovrBase.add(Keys.normalize(f2));
-                d.ovrImpl.add(Keys.normalize(f1));
+            if (v1.byteLength() > 0 && v2.byteLength() > 0) {
+                d.ovrBase.add(Keys.normalize(v2));
+                d.ovrImpl.add(Keys.normalize(v1));
+                d.ovrFile.add(XrefDoc.copy(v3));
+                if (d.ovrN < (int32) d.ovrLine.count()) {
+                    d.ovrLine[d.ovrN] = line;
+                    d.ovrN = d.ovrN + 1;
+                }
             }
-        } else {
-            if (f1.byteLength() > 0) {
-                d.declKey.add(Keys.normalize(f1));
-                d.declSig.add(f2.substring(0, f2.byteLength()));
-                d.declFile.add(f3.substring(0, f3.byteLength()));
+        } else if (section == 3) {
+            if (v1.byteLength() > 0) {
+                d.declKey.add(Keys.normalize(v1));
+                d.declSig.add(XrefDoc.copy(v2));
+                d.declFile.add(XrefDoc.copy(v3));
                 if (d.declN < (int32) d.declLine.count()) {
-                    d.declLine[d.declN] = fLine;
+                    d.declLine[d.declN] = line;
                     d.declN = d.declN + 1;
+                }
+            }
+            if (v4.byteLength() > 0) {
+                d.symFqn.add(XrefDoc.copy(v4));
+                d.symKind.add(XrefDoc.copy(v5));
+                d.symOwner.add(XrefDoc.copy(v6));
+                d.symSig.add(XrefDoc.copy(v2));
+                if (v1.byteLength() > 0) { d.symKey.add(Keys.normalize(v1)); }
+                else { d.symKey.add(XrefDoc.copy(v1)); }
+                d.symMods.add(XrefDoc.copy(mods));
+                d.symFile.add(XrefDoc.copy(v3));
+                if (d.symN < (int32) d.symLine.count()) {
+                    d.symLine[d.symN] = line;
+                    d.symCol[d.symN] = col;
+                    d.symN = d.symN + 1;
+                }
+            }
+        } else if (section == 4) {
+            if (v1.byteLength() > 0 && v2.byteLength() > 0) {
+                d.inhChild.add(XrefDoc.copy(v1));
+                d.inhParent.add(XrefDoc.copy(v2));
+                d.inhKind.add(XrefDoc.copy(v5));
+                d.inhFile.add(XrefDoc.copy(v3));
+                if (d.inhN < (int32) d.inhLine.count()) {
+                    d.inhLine[d.inhN] = line;
+                    d.inhN = d.inhN + 1;
+                }
+            }
+        } else if (section == 5) {
+            if (v1.byteLength() > 0) {
+                d.refTarget.add(XrefDoc.copy(v1));
+                d.refKind.add(XrefDoc.copy(v5));
+                d.refFrom.add(XrefDoc.copy(v2));
+                d.refFile.add(XrefDoc.copy(v3));
+                if (d.refN < (int32) d.refLine.count()) {
+                    d.refLine[d.refN] = line;
+                    d.refCol[d.refN] = col;
+                    d.refN = d.refN + 1;
                 }
             }
         }
