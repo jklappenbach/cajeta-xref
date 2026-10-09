@@ -19,7 +19,7 @@ jobs:
     with:
       # The suite reads back the index this compiler emits for the library's own
       # sources, so the pin is the format version the reader is checked against.
-      cajeta-version: v0.36.0
+      cajeta-version: v0.38.0
       # Builds the library, fetches the pinned cajeta-unit from Olla, emits the
       # self index, then runs the suite.
       test-command: ./run-tests.sh
