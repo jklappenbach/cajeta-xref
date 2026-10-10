@@ -12,6 +12,8 @@
     //
     // Why each cut happened, newest first:
     //
+    //   0.3.2 — the v0.39.0 fleet sweep. No source change, only the pins move.
+    //
     //   0.3.1 — the v0.38.0 fleet sweep. No source change, only the pins move.
     //
     //   0.3.0 — the whole of format 1. 0.2.x read only calls, overrides and
@@ -60,11 +62,11 @@
     // latest release" is not a floor and a pin would be exactly the false
     // claim this block forbids. What v0.29.0 did refuse was the published
     // cajeta-unit 0.2.5, and that was a floor on the dev-dependency below
-    // rather than on this package. Re-measured on v0.35.0, v0.36.0 and v0.38.0: still no pin needed.
+    // rather than on this package. Re-measured on v0.35.0, v0.36.0, v0.38.0 and v0.39.0: still no pin needed.
 
     "details": {
         "name":               "dev.cajeta.xref",
-        "version":            "0.3.1",
+        "version":            "0.3.2",
         "description":        "cajeta-xref — the compiler's --emit-xref cross-reference index as a typed library",
         "license":            "Apache-2.0",
         "authors":            ["Julian Klappenbach"],
@@ -117,12 +119,13 @@
         // Raised to 0.3.3 for the v0.35.0 sweep: 28 passed, 0 failed, 2 skipped.
         // Raised to 0.3.4 for the v0.36.0 sweep.
         // Raised to 0.3.5 for the v0.38.0 sweep.
+        // Raised to 0.3.6 for the v0.39.0 sweep.
         // Gated with 0.3.0 fetched from Olla on the released v0.29.0 binary:
         // 28 passed, 0 failed, 1 skipped. A real gate rather than a vacuous
         // one, measured: three deliberately flipped expectations report 25
         // passed, 3 failed and exit 1.
         "dev-dependencies": {
-            "dev.cajeta.unit": "0.3.5"
+            "dev.cajeta.unit": "0.3.6"
         },
 
         "repositories": [
