@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 # Builds + tests the library on a main push; on a v* tag also publishes a
 # GitHub Release and a signed publish to Olla (olla.cajeta.dev). Logic lives in
